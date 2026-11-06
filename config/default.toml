@@ -1,0 +1,56 @@
+[project]
+release = "FY2027"
+release_year = 2027
+coding_system = "ICD-10-CM"
+data_dir = "data"
+
+[security]
+allowed_hosts = ["ftp.cdc.gov", "www.cdc.gov"]
+request_timeout_seconds = 30
+download_retries = 3
+max_download_bytes = 104857600
+max_archive_members = 20000
+max_archive_uncompressed_bytes = 536870912
+max_archive_member_bytes = 104857600
+max_compression_ratio = 2000
+
+[[sources]]
+id = "table_and_index"
+role = "official_tabular_and_alphabetic_index"
+url = "https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/icd10cm-table-and-index-2027.zip"
+filename = "icd10cm-table-and-index-2027.zip"
+format = "zip"
+required = true
+
+[[sources]]
+id = "code_descriptions"
+role = "official_code_descriptions"
+url = "https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/icd10cm-code-descriptions-2027.zip"
+filename = "icd10cm-code-descriptions-2027.zip"
+format = "zip"
+required = true
+
+[[sources]]
+id = "guidelines"
+role = "official_coding_guidelines"
+url = "https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/ICD-10-CM-October-1-2026-FY27-Guidelines.pdf"
+filename = "ICD-10-CM-October-1-2026-FY27-Guidelines.pdf"
+format = "pdf"
+required = true
+
+[[sources]]
+id = "addenda"
+role = "official_addenda_reference"
+url = "https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/icd10cm-addenda-2027.zip"
+filename = "icd10cm-addenda-2027.zip"
+format = "zip"
+required = true
+
+[[sources]]
+id = "tabular_pdf"
+role = "optional_readable_tabular_reference"
+url = "https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/icd10cm-tabular-2027.pdf"
+filename = "icd10cm-tabular-2027.pdf"
+format = "pdf"
+required = false
+
