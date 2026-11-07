@@ -180,13 +180,14 @@ downloads all required sources only when explicitly invoked. Optional sources
 can be included with `--include-optional`. No Azure API calls or dataset
 generation are part of this setup stage.
 
-The source lock and `data/` artifacts are local, ignored files. Keep and back
-up `sources.lock.json` with the derived knowledge base and datasets when moving
-data between workspaces; ignoring it does not make it disposable. Re-imports
-replace a single configured source atomically and refresh the manifest hash;
-the builder refuses artifacts made against an older manifest. Git ignore rules
-do not remove files already tracked; review the index separately before sharing
-a repository.
+The four Kev-native JSONL files under `data/output/kev/native/` are intended
+to be shared in the repository. Other `data/` artifacts and the source lock
+are ignored. Keep and back up `sources.lock.json` with the derived knowledge
+base and datasets when moving data between workspaces; ignoring it does not
+make it disposable. Re-imports replace a single configured source atomically
+and refresh the manifest hash; the builder refuses artifacts made against an
+older manifest. Git ignore rules do not remove files already tracked; review
+the index separately before sharing a repository.
 
 ## Usage
 
@@ -759,6 +760,13 @@ prefix-preserving routing is a proposed improvement.
 This is a **snapshot inspected on 6 November 2026**, not live status or a
 clinical benchmark. Recalculate these figures after another run. Native task
 rows derived from one case are correlated; they are not independent patients.
+The four files in [data/output/kev/native/](data/output/kev/native/) are the
+intended shared training and evaluation snapshot. They contain synthetic
+notes, labels, hierarchy descriptions and task metadata; master records,
+source files, the source lock and export manifests are not included. Review
+the files and applicable third-party terms before publishing or redistributing
+them. Running `export-kev` again overwrites these filenames, so inspect changes
+before committing a replacement snapshot.
 
 | Partition | Cases | Mapped / out-of-scope / review | Mapped pilot codes | Native task rows | Native questions |
 |---|---:|---|---:|---:|---:|
