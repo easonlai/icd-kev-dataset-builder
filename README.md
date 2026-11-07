@@ -8,6 +8,10 @@ The model client uses the Azure OpenAI-compatible API.
 ## Contents
 
 - [Overview and design](#overview-and-design)
+- [How the training data is designed](#how-the-training-data-is-designed)
+  - [Worked example](#worked-example-from-note-to-training-tasks)
+  - [Candidate sets](#candidate-sets-during-training-and-inference)
+  - [Proposed improvements](#proposed-improvements-at-a-glance)
 - [Setup: official reference data](#setup-official-reference-data)
   - [Setup and commands](#setup-and-commands)
 - [Usage](#usage)
@@ -117,6 +121,154 @@ Key design rules:
   `--dry-run`, and `--full-run` (requires an explicit `--max-requests`).
   No prices are assumed or estimated.
 - **Untrusted text.** Source text and model output are treated as data.
+
+## How the training data is designed
+
+The dataset teaches a sequence of coding decisions, not a free-text answer. At each step, Kev receives the original note, a description of the current position in the hierarchy, and a set of options. Its supervised answer is the next branch or a control outcome. A downstream controller must connect those decisions into a route.
+
+The intended result is straightforward:
+
+```text
+Medical description → selected classification path → complete code
+                                              + supporting text
+                                              + coding checks
+```
+
+This builder supplies reference answers for that experiment. It does not implement the controller or establish that a trained model will reproduce those answers. A path looked up from a reference code is not an actual model trace.
+
+### Why these pilot codes
+
+The 50 codes cover five broad clinical areas and several close distinctions within them. Broad differences test chapter routing; neighboring codes test whether the model uses the details that determine the assignment. The list is an experimental scope, not a ranking of the most common diagnoses.
+
+| Family | Distinctions the examples should cover |
+|---|---|
+| Diabetes | Documented type, glucose complications, kidney complications and neurological complications |
+| Respiratory | Asthma classification and exacerbation status; COPD variants; pneumonia |
+| Circulatory | Coronary disease with or without angina, atrial fibrillation type, and heart-failure type |
+| Kidney and urinary | Recorded CKD stage, stage 3 subdivisions, ESRD, and unspecified stage |
+| Digestive | Reflux, esophagitis, bleeding, gastritis and ulcer distinctions |
+
+A useful example records the information needed to choose between related codes. It should not require the model to diagnose a condition from symptoms, treatment or laboratory results alone. Where a coding convention permits an assignment, that convention needs a reference in the case metadata.
+
+### Cases, tasks and model inputs
+
+One master case can produce many training rows. Those rows share a note and are not independent clinical examples.
+
+| Unit | What it represents |
+|---|---|
+| Planned slot | A requested case with a split, outcome and scenario specification |
+| Accepted master case | One synthetic note and its reference annotations |
+| Routing task | One choice at a reference parent, including a terminal STOP task |
+| Wrong-branch task | A justified NO_MATCH example at an unsuitable parent or leaf |
+| Evidence task | Sentence-level judgments derived from the note |
+
+Keep every task from a case in the same partition. Related scenario families also need to stay together when independence between partitions matters. A distinct case ID is not sufficient evidence that two notes are independent.
+
+| Available to the model | Kept outside the model input |
+|---|---|
+| Original note | Correct answer label and training target |
+| Current parent description | Future reference path and final answer |
+| Question and candidate options | Gold evidence summary and reviewer verdict |
+| Sentence text for evidence questions | Case, split and task-type metadata used only for tracking |
+
+A code can legitimately occur in the candidate list or current-node description. The leakage concern is disclosing which candidate is correct, not merely displaying code identifiers as options. Check the actual loader and request construction rather than assuming that removing a field named `label` removes every answer cue.
+
+### Worked example: from note to training tasks
+
+The following note is fictional. It illustrates the E11.22 pilot path; it is not a human-reviewed case or a recorded model prediction. Verify executable examples against the locked codebook when preparing a run.
+
+> S1: The clinician documents type 2 diabetes mellitus with diabetic chronic kidney disease.  
+> S2: The stage of chronic kidney disease is not specified in this note.
+
+Each row below uses the same original note. The controller context and correct next choice change.
+
+| Step | Current position | Reference answer | What the task teaches |
+|---|---|---|---|
+| 1 | Root | Endocrine, nutritional and metabolic diseases | Route the focused combination diagnosis |
+| 2 | Endocrine chapter | Diabetes mellitus, E08–E13 | Select the disease group |
+| 3 | Diabetes group | E11: type 2 diabetes mellitus | Use the documented type |
+| 4 | E11 | E11.2: kidney complications | Identify the documented complication |
+| 5 | E11.2 | E11.22: diabetic chronic kidney disease | Distinguish the complete code from related alternatives |
+| 6 | E11.22 | STOP | End this focused mapping |
+
+The real export uses node IDs and candidates from the reference artifacts. The table is a readable example, not a complete executable candidate list. Other diagnoses have shorter or longer paths.
+
+A wrong-parent task can place this same focused note under an unrelated branch and label it NO_MATCH. An evidence task can ask whether S1 directly documents the focused diagnosis. S2 records a staging limitation; it does not cancel the explicit diabetes-with-CKD diagnosis. Additional CKD coding requirements must be checked separately. Selecting this focused code does not complete all coding for the encounter.
+
+A future application should display the route actually selected, not substitute the reference route after prediction. It should show supporting quotes and any unresolved coding requirements alongside the result.
+
+### Candidate sets during training and inference
+
+Candidate construction is part of the experiment, not a formatting detail.
+
+| Use | May retain a candidate using the known answer? | What the result measures |
+|---|---|---|
+| Training export | Yes | Learning from answerable supervised choices |
+| Reference-parent evaluation | Yes, if disclosed | Local choices under supplied reference context |
+| End-to-end inference | No | The controller and model working without the answer |
+
+The current exporter retains the correct child and hash-ranks sibling distractors. Its default budget of 24 includes three controls, leaving room for 21 of the 22 ROOT chapters. That policy is documented below; it is not a deployed candidate-selection algorithm.
+
+A proposed improvement is to use all direct children where the actual question-token budget permits. ROOT would have 25 options with all 22 chapters and the three existing controls. This needs configuration/code changes and tokenizer validation; this README edit does not make that change. Where candidates must be reduced, the runtime policy must work without the gold label, and evaluation must measure whether it excludes the correct code.
+
+### Stopping, scope and review
+
+| Outcome | Meaning | Current data coverage |
+|---|---|---|
+| STOP | The current node completes the supported focused mapping | Terminal mapped tasks and wrong-leaf contexts |
+| NO_MATCH | The current branch does not fit the focused diagnosis | Selected wrong-parent/leaf tasks |
+| OUT_OF_SCOPE | The supported result lies outside the pilot | ROOT-level tasks |
+| NEEDS_REVIEW | Applicable rules do not resolve the documentation | ROOT-level tasks |
+
+STOP at a supplied final node is easier than deciding whether to stop at a valid node that also has more-specific children. The latter is not covered by the current gold-parent policy. Before adding such training tasks, verify whether those situations occur in the supported release and how code validity is represented; do not assume every category with descendants is reportable.
+
+Prefix-preserving review is another proposed extension. For example, a note may clearly support CKD while contradicting itself about stage. A controller could retain the supported renal-disease path and stop at the unresolved distinction instead of rejecting the note at ROOT. If the diagnosis itself is contradictory, earlier review may be appropriate. Missing detail alone does not require review when a valid unspecified code or coding rule resolves the assignment.
+
+### What counts as supporting evidence
+
+The native exporter derives sentence labels from focus-sentence membership. That is a concrete implementation rule, but focus and sufficient coding evidence are not necessarily the same thing.
+
+A proposed annotation rule is: mark a sentence positive when it explicitly records the focused diagnosis or an attribute needed for its coding. Background symptoms and management plans are not automatically positive or negative. Their role depends on the focused assignment.
+
+Include cases with support spread across sentences, relevant negation and unsupported alternatives. If a task does not include a candidate code, describe it as evidence for the focused diagnosis, not as a verifier for any arbitrary code. Exact-span checks establish that the quote exists; they do not establish that its interpretation is correct.
+
+### Scenario coverage and split design
+
+Writing-style variation is useful but does not replace clinical contrast coverage. The current planner documents style, trait and length controls. A proposed contrast matrix would additionally track the determining clinical attribute, competing values and expected label.
+
+For example, reordering an explicitly documented asthma assessment should preserve its label. Changing the documented exacerbation status may change it. Define those relationships before generating contrast pairs, and keep related cases together when assigning splits. Do not treat a new family ID as proof of a new clinical scenario.
+
+The documented calibration/development subdivision hashes case IDs, allowing some validation families into both sets. A family-grouped subdivision, followed by checks of code and outcome coverage, is recommended before definitive calibration/development comparisons. The existing snapshot remains useful for a trial, with this limitation disclosed.
+
+### Testing the value of fine-tuning
+
+Use the same cases, hierarchy, candidate policy and controller budget for default and fine-tuned Kev. Report complete-code accuracy separately from STOP, NO_MATCH and abstention outcomes. Good accuracy on supplied reference parents does not demonstrate that the model can reach those parents from ROOT.
+
+Input efficiency needs a separate comparison:
+
+| Checkpoint | Described options | Compact options |
+|---|---|---|
+| Default Kev | Baseline with explanations | Tests whether the baseline already works without them |
+| Fine-tuned Kev | Tests domain adaptation | Tests performance with reduced input |
+
+The generic compact export exists; native export currently uses only the described variant. A compact-native experiment therefore needs a compatible exporter change and validation. Keep case IDs, answers and partitions matched across variants.
+
+Fit confidence parameters on the calibration partition, use development for model/configuration decisions, and leave test untouched for final assessment. Use probabilities returned by the actual Kev interface. They are conditional on the supplied options. Multiplying local scores does not automatically produce a calibrated final-code probability.
+
+### Proposed improvements at a glance
+
+These are follow-up decisions, not features implemented by this documentation update.
+
+| Improvement | Reason | Suggested timing |
+|---|---|---|
+| Complete candidate sets where practical; gold-independent runtime selection | Avoid answer-aware candidate construction in end-to-end evaluation | Before the main model comparison |
+| Family-grouped calibration/development | Reduce dependence between the two partitions | Before tuning confidence and drawing definitive conclusions |
+| Intermediate stopping supervision, where applicable | Teach continue-versus-stop decisions beyond terminal tasks | After checking supported hierarchy semantics |
+| Supported prefixes for review/out-of-scope | Make partial lineage useful without forcing a code | When extending the controller/data policy |
+| Explicit evidence annotation policy | Separate focus selection from coding support | Before making evidence-quality claims |
+| Clinical contrast planning | Cover label-changing details, not only stylistic variation | Before the next generation round |
+| Verified compact-native export | Test the input-efficiency hypothesis fairly | Before an input-efficiency experiment |
+
 
 ## Setup: official reference data
 
@@ -608,8 +760,9 @@ path; it fails rather than substituting a code.
 
 The application derives hierarchy from XML containment, not from code-prefix
 truncation. Cross-references and instructions such as “use additional code”
-are not parent/child edges. Paths can have different depths, and a code may
-be a valid stopping point even when it has children. A description-catalogue
+are not parent/child edges. Paths can have different depths. If a node is both a valid complete code
+and a parent, its stopping policy must be checked against the actual release
+and exporter; do not infer reportability from its position in the tree. A description-catalogue
 entry without a supported tabular path is reported as unsupported; no path is
 invented. Every pilot target must be reportable and have a verified path.
 
@@ -891,9 +1044,9 @@ through per-layer routing tasks; this repository does not implement inference.
 
 - **Per-layer category and confidence.** Run the routing task level by level
   (chapter, block, category, ... , code). The model's choice among the options
-  is the category at that layer. Its confidence is the probability of that
-  option, taken from the model's token log-probabilities or a normalised score
-  over the option IDs, not a number the model writes.
+  is the category at that layer. Use the option probability returned by the actual Kev scoring
+  interface/version, rather than a percentage generated as text. Verify the
+  controller's API integration before interpreting the scores.
 - **Code confidence.** A product of conditional layer probabilities along the
   chosen path may be a starting point, but is not automatically a calibrated
   final-code probability. Validate and calibrate the complete routing system.
@@ -904,9 +1057,11 @@ through per-layer routing tasks; this repository does not implement inference.
 - **No confidence labels in the data.** The dataset does not contain generated
   confidence percentages. Raw probabilities from a model fine-tuned on
   synthetic data may be over-confident.
-- **Calibrate** on the validation split, and preferably on real or
-  clinician-written notes, before showing numbers to users (temperature scaling
-  or isotonic regression per layer; report reliability curves).
+- **Calibration.** Fit confidence parameters on the designated calibration
+  partition. Use development for configuration selection and the untouched test
+  set for final assessment. Resolve the family overlap described above before
+  treating calibration and development as independent. A real-note or
+  clinician-authored evaluation needs its own appropriate governance and review.
 - **Option lists.** Training tasks use an `--option-count` budget (default 24)
   that also reserves space for control options. The pilot root has 22 chapters,
   so not all fit alongside the three ROOT controls; another pilot branch has
