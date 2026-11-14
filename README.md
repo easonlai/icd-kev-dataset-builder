@@ -6,7 +6,7 @@ The aim is to teach Kev to read a note, choose its way through the coding hierar
 
 This repository builds the data for that experiment. It downloads and checks official CDC references, generates fictional outpatient notes through an Azure OpenAI-compatible deployment, reviews them, and exports training files. It does not train Kev or implement the application that will use it.
 
-The first recorded trial produced 1,460 accepted synthetic notes. The files passed a local Kev format check, but no fine-tuning result or independent clinical validation is reported here.
+The first recorded trial produced 1,460 accepted synthetic notes. A separate Colab experiment then fine-tuned Kev-0.8B on the exports. Accuracy on held-out synthetic questions rose from 58.33% to 98.80%. That measures answers to supplied questions, not live end-to-end coding or clinical validity. See [Colab fine-tuning results](#colab-fine-tuning-results).
 
 ## Start here
 
@@ -14,7 +14,8 @@ The first recorded trial produced 1,460 accepted synthetic notes. The files pass
 - To understand the training data, read [what one case teaches](#what-one-case-teaches).
 - To run the program, start with [installation and official references](#installation-and-official-references).
 - To use the exports, read [which files to use](#which-files-to-use) and [training and evaluation](#training-and-evaluation).
-- For the recorded results and their limits, read [the trial dataset](#the-trial-dataset).
+- For the dataset counts and checks, read [the trial dataset](#the-trial-dataset).
+- For the first model comparison, read [Colab fine-tuning results](#colab-fine-tuning-results).
 
 ## Contents
 
@@ -28,6 +29,7 @@ The first recorded trial produced 1,460 accepted synthetic notes. The files pass
 - [Which files to use](#which-files-to-use)
 - [Training and evaluation](#training-and-evaluation)
 - [The trial dataset](#the-trial-dataset)
+- [Colab fine-tuning results](#colab-fine-tuning-results)
 - [Design decisions still to resolve](#design-decisions-still-to-resolve)
 - [Tests](#tests)
 - [License](#license)
@@ -66,7 +68,7 @@ The main question is whether a domain-trained Kev can make better coding choices
 | Can it point to supporting text? | Evidence judgments agree with independently checked annotations |
 | Can the input be shorter? | Comparable or better results with fewer total input tokens and acceptable end-to-end latency |
 
-These are questions for future experiments, not benefits already demonstrated by this repository.
+The [first Colab experiment](#colab-fine-tuning-results) measures answers to supplied synthetic questions and examines confidence scores. Live end-to-end coding, independently checked evidence and input efficiency remain open questions.
 
 ### What it is not for
 
@@ -605,7 +607,7 @@ Measure the total across the route. Shorter individual prompts need not reduce t
 
 Use the option probabilities returned by the actual Kev scoring interface, not a percentage generated as prose. They are conditional on that question's options. Scores from different option sets are not automatically comparable.
 
-A product of conditional path probabilities can be investigated, but it is not automatically an empirically calibrated final-code probability. Validate the complete controller and scoring procedure. Do not fit temperature on development or test, and resolve the family overlap described below before treating calibration and development as independent.
+A product of conditional path probabilities can be investigated, but it is not automatically an empirically calibrated final-code probability. Validate the complete controller and scoring procedure. For a clean separation of roles, fit temperature on the calibration partition, not development or test, and resolve the family overlap described below before treating calibration and development as independent. The first Colab run used development for calibration; its results are reported with that limitation below.
 
 A pipeline smoke test shows that files flow through the tools. Paired model evaluation can show learning. Independently reviewed real or clinician-authored notes are needed to investigate transfer. None of these alone establishes safe deployment.
 
@@ -654,7 +656,7 @@ Saved audits report zero master cross-split lexical duplicates and family violat
 | Blind model re-code | Agreement under the configured review procedure | Human review or a complete rule/evidence audit |
 | Local Kev checker | Per-file format, duplicate and conflict checks | Exact tokenizer limits or successful fine-tuning |
 
-The snapshot has no independent human clinical review, real-note evaluation, training result or model-performance comparison. Exact tokenizer validation remains unperformed for this snapshot; an earlier 61-case pilot had separate loader/tokenizer checks. Do not transfer that earlier result to these files.
+At the time of this dataset audit, no training result had been recorded. The later [Colab experiment](#colab-fine-tuning-results) adds a synthetic-task comparison, not independent human clinical review or real-note evaluation. Exact tokenizer validation was not part of this dataset audit; an earlier 61-case pilot had separate loader/tokenizer checks. Do not transfer that earlier result to these files.
 
 ### Source provenance
 
@@ -677,9 +679,119 @@ The uploaded README records that the four local files were rehashed on 7 Novembe
 
 The existing audit leaves independent release verification of the guidelines PDF unresolved: filename/member metadata alone was not sufficient, although its content parsed. Keep that caveat with the snapshot. Matching hashes identify the files used; they do not resolve the release question. Generated notes are fictional, not CDC patient records.
 
+## Colab fine-tuning results
+
+The trial data were used to fine-tune Kev in a separate Google Colab notebook. On the held-out synthetic test questions, the original model answered 58.33% correctly. After fine-tuning, it answered 98.80% correctly.
+
+In plain language: the model became much better at the practice questions this builder produces. That is useful progress, but it does not yet show that the model can take a new clinical note and reliably find the right code by itself.
+
+### What was tested?
+
+Both versions of the model received the same test questions and choices. A routing question provided the note, the current position in the code hierarchy and the available next steps. Other questions asked the model to reject a wrong branch or identify supporting sentences.
+
+The test did not run a controller from ROOT to a final code. Each routing question was supplied separately at its reference position. If the model made an earlier mistake, later questions were still presented at the correct reference positions rather than wherever that mistake would have led.
+
+The experiment used fictional notes, not real patient records.
+
+### Training setup
+
+| Item | This run |
+|---|---|
+| Model | `jaredpalmer/kev-0.8b` |
+| Base model | `Qwen/Qwen3.5-0.8B-Base` |
+| Training set | 952 cases; 6,965 task records; 9,222 questions |
+| Development set | 97 cases; 739 task records; 1,001 questions |
+| Test set | 332 cases; 2,414 task records; 3,247 questions |
+| Training | 2 epochs, meaning two passes through the training data |
+| Learning rate | `4e-5` |
+| Batch settings | Batch size 1; gradient accumulation 8 |
+| Maximum state length | 2,048 tokens |
+| Confidence adjustment | Temperature `T = 2.52`, fitted on development data |
+
+One case produces several task records, and one record can contain several questions. The test therefore represents 332 synthetic cases—not 3,247 independent clinical examples.
+
+This run did not use the separate `calibration.jsonl` export. Instead, it fitted the confidence adjustment on development data. That differs from the recommended partition roles in [training and evaluation](#training-and-evaluation). A future run should separate calibration and development by scenario family and fit temperature on the calibration partition.
+
+### How much did the answers improve?
+
+| Test question type | Questions | Original model | Fine-tuned model | Correct after training |
+|---|---:|---:|---:|---:|
+| All questions | 3,247 | 58.33% | 98.80% | 3,208 / 3,247 |
+| Choose the next routing step | 1,598 | 75.53% | 98.94% | 1,581 / 1,598 |
+| Reject a supplied wrong branch (`NO_MATCH`) | 544 | 61.76% | 99.26% | 540 / 544 |
+| Select supporting sentences | 1,105 | 31.76% | 98.37% | 1,087 / 1,105 |
+
+Overall accuracy rose by 40.47 percentage points. Training fixed 1,323 answers and made nine previously correct answers wrong. Another 30 stayed wrong, leaving 39 errors after training.
+
+To estimate uncertainty, the report repeatedly resampled whole cases, keeping each case's questions together. This paired case-level bootstrap gave a 95% interval of +39.08 to +41.79 percentage points for the accuracy improvement. It describes uncertainty within this test sample, not variation across training runs or performance on real notes.
+
+### Where did it still struggle?
+
+Recognizing the boundary of the supported code list was the weakest result:
+
+| Expected answer | Meaning in this dataset | Questions | Original model | Fine-tuned model |
+|---|---|---:|---:|---:|
+| `STOP` | The supplied node completes the focused mapping | 272 | 82.72% | 100.00% |
+| `NEEDS_REVIEW` | The documentation needs review | 27 | 0.00% | 92.59% |
+| `OUT_OF_SCOPE` | The supported result falls outside this pilot | 33 | 0.00% | 63.64% |
+
+These rows are part of the routing results above, not extra questions.
+
+The model missed 12 of 33 outside-pilot questions. Examples include notes about asthma, heart failure and atrial fibrillation where the documented diagnosis falls outside the selected target codes. Recognizing the disease family is not enough: the model also needs to know whether this pilot supports the result. Six of those 12 misses had confidence of at least 0.90.
+
+Evidence selection left 18 errors: 11 sentences were selected when the annotation said they should not be, and seven supporting sentences were missed. Before adding more examples, the evidence policy needs checking—especially for sentences describing qualifiers, pertinent negatives or missing details.
+
+Three wrong-branch questions were answered with `STOP` instead of `NO_MATCH`. The perfect score on supplied STOP questions therefore does not mean the model always knows when a branch is wrong.
+
+### Did it get every routing step right for a case?
+
+A tougher check counts a case as correct only if all its supplied routing questions were right:
+
+| Case group | Cases | Original model | Fine-tuned model |
+|---|---:|---:|---:|
+| All cases | 332 | 80 / 332 (24.1%) | 315 / 332 (94.9%) |
+| Mapped to a pilot code | 272 | 80 / 272 (29.4%) | 269 / 272 (98.9%) |
+| Outside the pilot | 33 | 0 / 33 (0.0%) | 21 / 33 (63.6%) |
+| Requires review | 27 | 0 / 27 (0.0%) | 25 / 27 (92.6%) |
+
+This measure is called case-level routing-task exact match. It does not include evidence answers and is not live end-to-end coding accuracy. It checks a bundle of supplied questions, not the path a controller actually took.
+
+### Could the confidence scores be trusted?
+
+The fine-tuned, calibrated model had better overall probability scores on this test set:
+
+| Measure | Original model | Fine-tuned and calibrated |
+|---|---:|---:|
+| Brier score | 0.7077 | 0.0194 |
+| Negative log-likelihood (NLL) | 1.2905 | 0.0371 |
+| Expected calibration error (ECE) | 0.3818 | 0.0035 |
+| High-confidence mistakes, as a share of all questions | 7.76% | 0.52% |
+
+Lower is better for all four rows. Brier and NLL assess the probabilities assigned to answers; ECE compares stated confidence with observed accuracy. A high-confidence mistake here means a wrong answer with confidence of at least 0.90.
+
+Temperature calibration adjusts probabilities without changing the selected answer. On development data, accuracy stayed at 98.80% after calibration. The test results compare the original model with the fine-tuned, calibrated model; there is no saved uncalibrated fine-tuned test run to separate their effects on probability quality.
+
+These overall scores do not establish a safe confidence threshold. The outside-pilot errors show why individual groups still need checking. Confidence-ranked coverage charts in the full report describe this test set retrospectively, not a validated automation policy.
+
+### What can we conclude?
+
+This first run shows a substantial improvement on the builder's held-out synthetic questions. It does not yet establish reliable real-world coding.
+
+The remaining limits are practical ones:
+
+- The model has not been tested with a live ROOT-to-termination controller. The exported candidate sets retain the correct answer; a runtime controller cannot use the answer to choose its options.
+- The notes and labels are model-generated and model-reviewed. There is no independent clinical review or real-note evaluation.
+- Only one model size and one training run are reported. Per-code results and variation across training seeds have not been measured.
+- Compact options, shorter total input and end-to-end latency were not tested.
+- The earlier dataset audit found no shared case IDs across native partitions, but did find 19 scenario families shared by calibration and development. The resumed report session did not repeat the full split audit. These checks do not establish semantic independence.
+
+The next useful tests are a controller with answer-independent candidate selection, a family-isolated calibration split, and independently reviewed notes. Until then, treat this as evidence of learning on the synthetic task—not clinical validity, billing readiness or a reason to run unattended.
+
+For the detailed tables and error examples, see the accompanying Colab notebook and `Executive_Technical_Evaluation_Report.md`. The dataset builder itself still only creates data; training and evaluation take place separately.
+
 ## Design decisions still to resolve
 
-The project is ready for a trial, but several choices affect what a later model comparison can claim. These are follow-up work, not features added by this README.
+The first model comparison is now recorded above. Several design choices still limit what it can tell us and what a future controller will need to handle. The items below are follow-up work, not implemented features.
 
 ### Candidate selection without knowing the answer
 
